@@ -2,94 +2,122 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <cmath>
+#include <map>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
 #include "json.hpp"
 
-using json = nlohmann::json;
 using namespace std;
+using json = nlohmann::json;
 
-typedef pair<double, double> Point;
+typedef pair<long double, long double> Point;
 
-// Converts a number string in a given base to base 10
-unsigned long long decodeBase(const string& value, int base) {
-    unsigned long long result = 0;
-    for (char digit : value) {
-        int num;
-        if (isdigit(digit)) num = digit - '0';
-        else if (isalpha(digit)) num = tolower(digit) - 'a' + 10;
-        else throw invalid_argument("Invalid character in base value");
-
-        if (num >= base) throw invalid_argument("Digit out of base range");
-
-        result = result * base + num;
+// Decode a string in a given base to base-10
+long double decodeBase(const string& value, int base) {
+    long double result = 0.0L;
+    for (char ch : value) {
+        int digit;
+        if (isdigit(ch)) digit = ch - '0';
+        else if (isalpha(ch)) digit = tolower(ch) - 'a' + 10;
+        else throw invalid_argument("Invalid character in encoded number");
+        if (digit >= base) throw invalid_argument("Digit out of range for base");
+        result = result * base + digit;
     }
     return result;
 }
 
-// Perform Lagrange interpolation to compute constant term (f(0))
-double lagrangeInterpolation(const vector<Point>& points) {
-    double result = 0.0;
+// Lagrange interpolation to compute f(0)
+long double lagrangeConstant(const vector<Point>& points) {
+    long double result = 0.0L;
     int k = points.size();
 
-    for (int i = 0; i < k; i++) {
-        double xi = points[i].first;
-        double yi = points[i].second;
+    for (int i = 0; i < k; ++i) {
+        long double xi = points[i].first;
+        long double yi = points[i].second;
 
-        double term = yi;
-        for (int j = 0; j < k; j++) {
-            if (i != j) {
-                double xj = points[j].first;
-                term *= (0 - xj) / (xi - xj);
-            }
+        long double term = yi;
+        for (int j = 0; j < k; ++j) {
+            if (i == j) continue;
+            long double xj = points[j].first;
+            term *= (0.0L - xj) / (xi - xj);
         }
+
         result += term;
     }
+
     return result;
 }
 
-vector<Point> parseJSONTestCase(const string& filename) {
+// Read and decode points from the given JSON file
+vector<Point> parseJSON(const string& filename, int& k_out) {
     ifstream file(filename);
     if (!file.is_open()) {
-        cerr << "❌ Failed to open file: " << filename << endl;
+        cerr << "❌ Could not open file: " << filename << endl;
         exit(1);
     }
 
     json j;
     file >> j;
+
     int n = j["keys"]["n"];
     int k = j["keys"]["k"];
+    k_out = k;
 
     vector<Point> points;
 
-    for (auto& [key, value] : j.items()) {
+    cout << "\n📄 Reading: " << filename << "\nDecoded points (x, y):\n";
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        string key = it.key();
         if (key == "keys") continue;
 
         int x = stoi(key);
-        int base = stoi(value["base"].get<string>());
-        string encoded = value["value"];
+        int base = stoi(it.value()["base"].get<string>());
+        string y_encoded = it.value()["value"];
 
         try {
-            unsigned long long y = decodeBase(encoded, base);
-            points.emplace_back((double)x, (double)y);
+            long double y = decodeBase(y_encoded, base);
+            cout << "  (" << x << ", " << fixed << setprecision(0) << y << ")   [base " << base << " → " << y_encoded << "]\n";
+            points.emplace_back(x, y);
         } catch (...) {
-            cerr << "Error decoding value at key " << key << endl;
+            cerr << "⚠️  Failed to decode key " << key << "\n";
         }
     }
 
-    sort(points.begin(), points.end()); // Ensure consistent selection
-    points.resize(k); // Use only the first k valid points
-    return points;
+    if (points.size() < k) {
+        cerr << "❌ Not enough points to interpolate.\n";
+        exit(1);
+    }
+
+    // Use first k points (by key order, not sorted by x)
+    vector<Point> result;
+    for (int i = 1; i <= k && result.size() < k; i++) {
+        for (const auto& p : points) {
+            if ((int)p.first == i) {
+                result.push_back(p);
+                break;
+            }
+        }
+    }
+    
+    cout << "Using " << result.size() << " points for interpolation:\n";
+    for (const auto& p : result) {
+        cout << "  (" << (int)p.first << ", " << fixed << setprecision(0) << p.second << ")\n";
+    }
+    
+    return result;
 }
 
 int main() {
     vector<string> files = {"testcase1.json", "testcase2.json"};
-    for (int i = 0; i < files.size(); i++) {
-        vector<Point> points = parseJSONTestCase(files[i]);
-        double c = lagrangeInterpolation(points);
-        cout << "🔐 Secret from " << files[i] << " (constant term c) = ";
-        cout << fixed << setprecision(0) << c << endl;
+
+    for (const auto& file : files) {
+        int k = 0;
+        vector<Point> points = parseJSON(file, k);
+        long double c = lagrangeConstant(points);
+
+        cout << "🔐 Constant term (secret c) from " << file << " = " << fixed << setprecision(0) << llround(c) << "\n";
     }
+
     return 0;
 }
